@@ -42,20 +42,14 @@ class AssistBranch(nn.Module):
         self.classifier = Classifier(d_model=d_model, n_cls=n_class)
 
     def forward(self, gt_onehot, mask=None):
-        # gt_onehot: (B, T, n_class)
-
-        x = self.proj(gt_onehot)  # (B, T, D)
-
+        x = self.proj(gt_onehot)
         enc_out = x
         for layer in self.encoder_layers:
-            enc_out = layer(enc_out, mask=mask)  # (B, T, D)
+            enc_out = layer(enc_out, enc_out, mask=mask)
 
-        enc_out = self.norm(enc_out)  # (B, T, D)
-        coarse_probs, fine_probs = self.classifier(
-            enc_out
-        )  # (B, T, n_class), (B, T, n_class)
-
-        return coarse_probs, fine_probs, enc_out  # (B, T, D)
+        enc_out = self.norm(enc_out)
+        coarse_probs, fine_probs = self.classifier(enc_out, enc_out)
+        return coarse_probs, fine_probs, enc_out
 
 
 class InferenceBranch(nn.Module):
@@ -93,20 +87,11 @@ class InferenceBranch(nn.Module):
 
         self.classifier = Classifier(d_model=d_model, n_cls=n_cls)
 
-    def forward(
-        self,
-        x,
-    ):
-        # x: (B, T, D)
+    def forward(self, x):
 
-        downsampled_feats = self.downsampler(x)  # List of (B, T//s, D)
+        downsampled_feats = self.downsampler(x)
+        msbm_out = self.msbm(downsampled_feats)
+        fine_feat, coarse_feat = self.mixture(msbm_out)
+        coarse_probs, fine_probs = self.classifier(coarse_feat, fine_feat)
 
-        msbm_out = self.msbm(x, downsampled_feats)  # (B, T, D)
-
-        mixed_feat = self.mixture(msbm_out, downsampled_feats)  # (B, T, D)
-
-        coarse_probs, fine_probs = self.classifier(
-            mixed_feat
-        )  # (B, T, n_class), (B, T, n_class)
-
-        return coarse_probs, fine_probs  # (B, T, n_class), (B, T, n_class)
+        return coarse_probs, fine_probs
