@@ -17,16 +17,21 @@ import torch.nn.functional as F
 
 class Classifier(nn.Module):
 
-    def __init__(self, d_model, n_cls):
+    def __init__(self, d_model, n_cls, fine_weight=0.1):
         super().__init__()
 
+        self.fine_weight = fine_weight
         self.linear_coarse_1 = nn.Conv1d(d_model, d_model, kernel_size=1)
         self.linear_coarse_2 = nn.Conv1d(d_model, n_cls, kernel_size=1)
         self.linear_fine = nn.Conv1d(d_model, n_cls, kernel_size=1)
 
         self.dropout = nn.Dropout()
 
-    def forward(self, x_coarse, x_fine):
+    def forward(
+        self,
+        x_coarse,
+        x_fine,
+    ):
         # x_coarse: (B, T, D)
         # x_fine: (B, T, D)
 
@@ -38,4 +43,7 @@ class Classifier(nn.Module):
         coarse_probs = self.linear_coarse_2(x_coarse)  # (B, n_cls, T)
         coarse_probs = coarse_probs.transpose(1, 2)  # (B, T, n_cls)
 
-        return coarse_probs, fine_probs
+        fused_probs = (
+            1 - self.fine_weight
+        ) * coarse_probs + self.fine_weight * fine_probs
+        return fused_probs

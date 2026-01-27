@@ -48,8 +48,8 @@ class AssistBranch(nn.Module):
             enc_out = layer(enc_out, enc_out, mask=mask)
 
         enc_out = self.norm(enc_out)
-        coarse_probs, fine_probs = self.classifier(enc_out, enc_out)
-        return coarse_probs, fine_probs, enc_out
+        fused_probs = self.classifier(enc_out, enc_out)
+        return fused_probs
 
 
 class InferenceBranch(nn.Module):
@@ -65,6 +65,7 @@ class InferenceBranch(nn.Module):
         mode="linear",
         align_corners=True,
         n_cls=32,
+        fine_weight=0.1,
     ):
 
         super().__init__()
@@ -85,13 +86,15 @@ class InferenceBranch(nn.Module):
             d_model=d_model, depth=depth, mode=mode, align_corners=align_corners
         )
 
-        self.classifier = Classifier(d_model=d_model, n_cls=n_cls)
+        self.classifier = Classifier(
+            d_model=d_model, n_cls=n_cls, fine_weight=fine_weight
+        )
 
     def forward(self, x):
 
         downsampled_feats = self.downsampler(x)
         msbm_out = self.msbm(downsampled_feats)
         fine_feat, coarse_feat = self.mixture(msbm_out)
-        coarse_probs, fine_probs = self.classifier(coarse_feat, fine_feat)
+        fused_probs = self.classifier(coarse_feat, fine_feat)
 
-        return coarse_probs, fine_probs
+        return fused_probs
