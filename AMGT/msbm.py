@@ -84,7 +84,7 @@ class BiMamba2(nn.Module):
 
         x_flip = torch.flip(x, dims=[1])
         out_bwd = self.mamba_bwd(x_flip)
-        out_bwd = torch.flip(out_fwd, dims=[1])
+        out_bwd = torch.flip(out_bwd, dims=[1])
 
         combined = torch.cat([out_fwd, out_bwd], dim=-1)
         return self.norm(x + self.proj(combined))
@@ -163,70 +163,3 @@ class Mixture(nn.Module):
             else:
                 coarse += self.resize(x, T, mode=self.mode)
         return fine, coarse
-
-
-# class UMamba(nn.Module):
-
-#     def __init__(
-#         self,
-#         d_model,
-#         d_state=64,
-#         d_conv=4,
-#         expand=2,
-#         scale_factor=2,
-#         scale_depths=3,
-#         mode="linear",
-#     ):
-#         """UNet-Based Bi-Mamba
-
-#         Args:
-#             Ts (int, optional): Scales Number. Defaults to 2.
-
-#             Other Args follow BiMamba2.
-#         """
-
-#         super().__init__()
-
-#         self.mode = mode
-
-#         self.downsamplers = DSBlock(
-#             d_model=d_model, scale_factor=scale_factor, depth=scale_depths
-#         )
-
-#         self.encoders = nn.ModuleList()
-#         for _ in range(scale_depths):
-#             self.encoders.append(
-#                 BiMamba2(
-#                     d_model=d_model,
-#                     d_state=d_state,
-#                     d_conv=d_conv,
-#                     expand=expand,
-#                 )
-#             )
-
-#     def resize(self, x, target_t, mode="linear"):
-#         # x: (B, Ts, D)
-#         x = x.transpose(1, 2)  # (B, D, Ts)
-
-#         if mode == "linear":
-#             x = F.interpolate(
-#                 x, size=target_t, mode="linear", align_corners=True
-#             )
-#         elif mode == "nearest":
-#             x = F.interpolate(x, size=target_t, mode="nearest")
-#         else:
-#             raise ValueError(f"Unsupported resize mode: {mode}")
-#         x = x.transpose(1, 2)  # (B, T, D)
-#         return x
-
-#     def forward(self, x):
-#         # x: (B, T, D)
-#         _, T, _ = x.size()
-#         ds = self.downsamplers(x)  # List of multi-scale features
-#         out = []
-#         for i, x in enumerate(ds):
-#             m_out = self.encoders[i](x)  # (B, T//(scale_factor**i), D)
-#             if i != 0:
-#                 m_out = self.resize(m_out, T, self.mode)
-#             out.append(m_out)  # (B, T, D)
-#         return out  # List of (B, T, D) for diverse scales T: T, T/2, T/4, ...
