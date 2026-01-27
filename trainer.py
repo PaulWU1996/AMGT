@@ -16,6 +16,10 @@ def trainning_step(batch, assist, inference, optimizer_assist, optimizer_inferen
         criterion_inference (_type_): _description_
         device (_type_): _description_
     """
+
+    assist.train()
+    inference.train()
+
     inputs, gt_labels = batch
     inputs = inputs.to(device)  # (B, T, D)
     gt_labels = gt_labels.to(device)  # (B, T, n_class)
@@ -33,11 +37,33 @@ def trainning_step(batch, assist, inference, optimizer_assist, optimizer_inferen
     for param in inference.classifier.parameters():
         param.requires_grad = False
 
+    for param in assist.classifier.parameters():
+        param.requires_grad = True
+
     # Step 3: Inference Branch Forward Pass
     inference_outputs = inference(inputs)  # (B, T, n_class)
     loss_inference = criterion_inference(inference_outputs, gt_labels)
     loss_inference.backward()
     optimizer_inference.step()
+
+    return {
+        'loss_assist': loss_assist.item(),
+        'loss_inference': loss_inference.item()
+    }
+
+def evaluation_step(batch, inference, device, criterion, metric):
+
+    inference.eval()
+
+    inputs, gt_labels = batch
+    inputs = inputs.to(device)  # (B, T, D)
+    gt_labels = gt_labels.to(device)  # (B, T, n_class)
+
+    with torch.no_grad():
+        inference_outputs = inference(inputs)  # (B, T, n_class)
+    
+    loss = criterion(inference_outputs, gt_labels)
+    metric(inference_outputs, gt_labels)
 
     
 
