@@ -92,7 +92,7 @@ class BiMamba2(nn.Module):
 
 class MultiScaleBiMamba(nn.Module):
 
-    def __init__(self, d_model, d_state=64, d_conv=4, expand=2, depths=3):
+    def __init__(self, d_model, d_state=64, d_conv=4, expand=2, depth=3):
         """
 
         Args:
@@ -102,7 +102,7 @@ class MultiScaleBiMamba(nn.Module):
         """
         super().__init__()
         self.encoders = nn.ModuleList()
-        for _ in range(depths):
+        for _ in range(depth):
             self.encoders.append(
                 BiMamba2(
                     d_model=d_model,
@@ -124,13 +124,13 @@ class MultiScaleBiMamba(nn.Module):
 class Mixture(nn.Module):
     """Mixture Module to combine multi-scale features"""
 
-    def __init__(self, d_model, depths=3, mode="linear", align_corners=True):
+    def __init__(self, d_model, depth=3, mode="linear", align_corners=True):
         super().__init__()
 
         self.mode = mode
         self.align_corners = align_corners
         self.projs = nn.ModuleList()
-        for _ in range(depths):
+        for _ in range(depth):
             self.projs.append(nn.Linear(d_model, d_model))
 
     def resize(self, x, target_t, mode="linear"):

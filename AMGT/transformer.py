@@ -79,19 +79,6 @@ class ShawRPE(nn.Module):
 class Attention(nn.Module):
 
     def __init__(self, d_q: int, d_kv: int, d_head: int, n_head: int, **kwargs):
-        """
-
-        Args:
-            d_q (int): The dimension of the query.
-            d_kv (int): The dimension of the key and value.
-            d_head (int): The dimension of each head.
-            n_head (int): The number of attention heads.
-
-            share_norm (bool, optional): Whether Q & KV share the same LayerNorm. Defaults to True.
-            rpe (ShawRPE or bool, optional): Relative position encoding module or flag to use default ShawRPE. Defaults to False.
-                Example: rpe=ShawRPE(dim=d_head, max_offset=128, max_len-2048, bidirectional=True) to customize.
-        """
-
         super(Attention, self).__init__()
         self.W_q = nn.Linear(d_q, d_head * n_head)
         self.W_k = nn.Linear(d_kv, d_head * n_head)
@@ -101,7 +88,6 @@ class Attention(nn.Module):
         self.d_head = d_head
         self.W_o = nn.Linear(d_head * n_head, d_q)
 
-        # Q & KV share the same LayerNorm or not
         if kwargs.get("share_norm", True) and d_q == d_kv:
             norm = nn.LayerNorm(d_q)
             self.norm_q = norm
@@ -110,25 +96,18 @@ class Attention(nn.Module):
             self.norm_q = nn.LayerNorm(d_q)
             self.norm_kv = nn.LayerNorm(d_kv)
 
-        # Check the relative position encoding or absolute position encoding
         self.rpe = kwargs.get("rpe", None)
 
-    def forward(self, q: torch.Tensor, kv: torch.Tensor, mask=None):
-        """
-
-        Args:
-            q (torch.Tensor): Query input embedding [B, N_q, D_q]
-            kv (torch.Tensor): Key/Value input embedding [B, N_kv, D_kv]
-            mask (_type_, optional): Mask tensor arrays. Defaults to None.
-
-        Returns:
-            out (torch.Tensor): The output tensor after attention [B, N_q, n_head * d_head]
-            atten (torch.Tensor): The attention weights [B, n_head, N_q, N_kv]
-        """
+    def forward(
+        self,
+        q: torch.Tensor,
+        kv: torch.Tensor,
+        mask: torch.Optional[torch.Tensor] = None,
+    ):
 
         assert (
             q.dim() == 3 and kv.dim() == 3
-        ), "Input tensors must be 3-dimensional [batch, seq_len, dim]"
+        ), "输入必须是 3 维张量 [batch, seq_len, dim]"
 
         B, N_q, _ = q.size()
         B, N_kv, _ = kv.size()
@@ -136,44 +115,51 @@ class Attention(nn.Module):
         q = self.norm_q(q)
         kv = self.norm_kv(kv)
 
-        # step 1: Project q, k, v into same dimension space
-
-        Q = (
-            self.W_q(q).view(B, N_q, self.n_head, self.d_head).transpose(1, 2)
-        )  # [B, head, N, D]
+        # Step 1:  [B, n_head, N, d_head]
+        Q = self.W_q(q).view(B, N_q, self.n_head, self.d_head).transpose(1, 2)
         K = self.W_k(kv).view(B, N_kv, self.n_head, self.d_head).transpose(1, 2)
         V = self.W_v(kv).view(B, N_kv, self.n_head, self.d_head).transpose(1, 2)
 
-        # step 2: Scaled Dot-Product Attention
+        # Step 2:
+        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
 
-        scores = (
-            torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-        )  # [B, head, N_q, N_kv]
-
+        # Step 3: TorchScript Support
         if self.rpe is not None:
-            rpe_bias = self.rpe(N_kv).to(Q.device)  # [N_kv, N_kv, D]
-            Q_ = Q.unsqueeze(3)  # [B, head, N_q, 1, D]
-            rpe_ = rpe_bias.unsqueeze(0).unsqueeze(0)  # [1, 1, N_kv, N_kv, D]
-            rpe_scores = torch.matmul(Q_, rpe_.transpose(-2, -1)).sum(-1)  #
-            scores = scores + rpe_scores * self.scale  # [B, head, N_q, N_kv]
+            # rpe_bias shape: [N_kv, N_kv, d_head]
+            rpe_bias = self.rpe(N_kv).to(Q.device)
 
-        # step 3: Apply mask (optional)
+            # Q:  [N_q, B * n_head, d_head]
+            q_rpe = Q.permute(2, 0, 1, 3).reshape(
+                N_q, B * self.n_head, self.d_head
+            )
+            # rpe_bias: [N_kv, d_head, N_kv]
+            r_rpe = rpe_bias.transpose(1, 2)
+
+            # bmm : [N_q, B * n_head, N_kv]
+            rpe_scores = torch.bmm(q_rpe, r_rpe)
+
+            # reshape to [B, n_head, N_q, N_kv]
+            rpe_scores = rpe_scores.reshape(N_q, B, self.n_head, N_kv).permute(
+                1, 2, 0, 3
+            )
+
+            scores = scores + rpe_scores * self.scale
+
+        # Step 4: Mask and Softmax
         if mask is not None:
-            mask = mask.unsqueeze(1).unsqueeze(2)  # [B, 1, 1, N_kv]
+            mask = mask.unsqueeze(1).unsqueeze(2)
             scores = scores.masked_fill(mask == False, float("-inf"))
 
-        # step 4: Softmax
-        atten = F.softmax(scores, dim=-1)  # [B, head, N_q, N_kv]
+        atten = F.softmax(scores, dim=-1)
 
-        # step 5: Weighted sum of values
-        out = torch.matmul(atten, V)  # [B, head, N, D]
+        # Step 5: 输出投影
+        out = torch.matmul(atten, V)
         out = (
             out.transpose(1, 2)
             .contiguous()
             .view(B, N_q, self.n_head * self.d_head)
-        )  # [B, N, head*D]
-        out = self.W_o(out)  # [B, N, D_q]
-        return out, atten
+        )
+        return self.W_o(out), atten
 
 
 class EncoderLayer(nn.Module):
