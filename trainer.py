@@ -3,6 +3,28 @@ from utils import AsymetricLoss
 
 import torch
 from time import time
+from tqdm import tqdm
+import torch.nn.functional as F
+
+
+# def unpack_batch(batch, dataset, phase="training"):
+#     inputs, mask, laebls, other, hm = batch
+#     if dataset == "multithomus":
+#         if phase == "training":
+#             inputs = inputs.squeeze(3).squeeze(3)
+#         else:
+#             inputs = inputs.squeeze(0)
+#             labels = labels.squeeze(dim=0)
+#             if inputs.dim() == 5:
+#                 inputs = inputs.squeeze(2).squeeze(2).permute(0, 2, 1)
+#                 mask = mask.squeeze(0)
+#             else:
+#                 inputs = inputs.squeeze(1).squeeze(1).permute(1, 0).unsqueeze(0)
+#                 labels = labels.unsqueeze(0)
+#     elif dataset == "charades":
+#         pass
+#     else:
+#         raise ValueError(f"Unknown dataset: {dataset}")
 
 
 def training_epoch(
@@ -14,11 +36,14 @@ def training_epoch(
     criterion_assist,
     criterion_inference,
     device,
+    epoch,
 ):
     total_loss_assist, total_loss_inference = 0.0, 0.0
     time_start = time()
-    for batch in dataloader:
+
+    for batch in tqdm(dataloader, desc="Training Epoch {epoch}"):
         losses = trainning_step(
+            dataset,
             batch,
             assist,
             inference,
@@ -39,6 +64,7 @@ def training_epoch(
 
 
 def trainning_step(
+    dataset,
     batch,
     assist,
     inference,
@@ -64,15 +90,25 @@ def trainning_step(
     assist.train()
     inference.train()
 
-    inputs, gt_labels = batch
+    # TODO: link with unpack_batch to cover different datasets
+    inputs, mask, labels, other, hm = batch
+
     inputs = inputs.to(device)  # (B, T, D)
-    gt_labels = gt_labels.to(device)  # (B, T, n_class)
+    mask = mask.to(device) if mask is not None else None
+    labels = labels.to(device)  # (B, T, n_class)
+
     optimizer_assist.zero_grad()
     optimizer_inference.zero_grad()
 
     # Step 1: Assist Branch Forward Pass
-    assist_outputs = assist(gt_labels)  # (B, T, n_class)
-    loss_assist = criterion_assist(assist_outputs, gt_labels)
+    assist_outputs = assist(labels)  # (B, T, n_class)
+    assist_outputs = F.sigmoid(assist_outputs) * mask.unsqueeze(
+        2
+    )  # Apply mask if available
+    loss_assist = criterion_assist(
+        assist_outputs, labels
+    )  # AsymetricLoss(assist_outputs, labels) -> logits (B, T, n_class), labels (B, T, n_class)
+
     loss_assist.backward()
     optimizer_assist.step()
 

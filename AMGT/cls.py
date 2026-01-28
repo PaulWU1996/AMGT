@@ -46,4 +46,4 @@ class Classifier(nn.Module):
         fused_probs = (
             1 - self.fine_weight
         ) * coarse_probs + self.fine_weight * fine_probs
-        return fused_probs
+        return fused_probs  # TODO: Considering outputting fine and coarse probs later
