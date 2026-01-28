@@ -2,6 +2,40 @@ from AMGT.network import AssistBranch, InferenceBranch
 from utils import AsymetricLoss
 
 import torch
+from time import time
+
+
+def training_epoch(
+    dataloader,
+    assist,
+    inference,
+    optimizer_assist,
+    optimizer_inference,
+    criterion_assist,
+    criterion_inference,
+    device,
+):
+    total_loss_assist, total_loss_inference = 0.0, 0.0
+    time_start = time()
+    for batch in dataloader:
+        losses = trainning_step(
+            batch,
+            assist,
+            inference,
+            optimizer_assist,
+            optimizer_inference,
+            criterion_assist,
+            criterion_inference,
+            device,
+        )
+
+        total_loss_assist += losses["loss_assist"]
+        total_loss_inference += losses["loss_inference"]
+    time_end = time()
+    avg_loss_assist = total_loss_assist / len(dataloader)
+    avg_loss_inference = total_loss_inference / len(dataloader)
+    print(f"Training Epoch completed in {time_end - time_start:.2f} seconds")
+    return avg_loss_assist, avg_loss_inference
 
 
 def trainning_step(

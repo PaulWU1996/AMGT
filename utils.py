@@ -1,6 +1,14 @@
 import torch
 import torch.nn as nn
 
+try:
+    import wandb
+
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("wandb is not installed. WandbLogger will not be available.")
+
 
 class AsymetricLoss(nn.Module):
 
@@ -53,3 +61,39 @@ class AsymetricLoss(nn.Module):
             loss *= one_sided_w
 
         return -loss.sum()
+
+
+def log(content, epoch=None, step=None, prefix="training"):
+
+    if epoch is None and step is None:
+        raise ValueError("Either epoch or step must be provided for logging.")
+
+    # WandB Logger
+    if WANDB_AVAILABLE and wandb.run is not None:
+        if epoch is not None:
+            wandb.log({**content, "epoch": epoch})
+        elif step is not None:
+            wandb.log({**content, "global_step": step})
+
+    # Txt Logger
+    else:
+
+        if isinstance(content, dict):
+
+            log_str = " | ".join(
+                [
+                    f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}"
+                    for k, v in content.items()
+                ]
+            )
+
+        else:
+            log_str = str(content)
+        if epoch is not None:
+            filename = f"{prefix}_epoch.txt"
+            with open(filename, "a") as f:
+                f.write(f"Epoch {epoch}: {log_str}\n")
+        if step is not None:
+            filename = f"{prefix}_step.txt"
+            with open(filename, "a") as f:
+                f.write(f"Step {step}: {log_str}\n")
