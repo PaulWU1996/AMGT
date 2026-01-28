@@ -1,9 +1,19 @@
 from AMGT.network import AssistBranch, InferenceBranch
+from utils import AsymetricLoss
 
 import torch
 
 
-def trainning_step(batch, assist, inference, optimizer_assist, optimizer_inference, criterion_assist, criterion_inference, device):
+def trainning_step(
+    batch,
+    assist,
+    inference,
+    optimizer_assist,
+    optimizer_inference,
+    criterion_assist,
+    criterion_inference,
+    device,
+):
     """
 
     Args:
@@ -47,9 +57,10 @@ def trainning_step(batch, assist, inference, optimizer_assist, optimizer_inferen
     optimizer_inference.step()
 
     return {
-        'loss_assist': loss_assist.item(),
-        'loss_inference': loss_inference.item()
+        "loss_assist": loss_assist.item(),
+        "loss_inference": loss_inference.item(),
     }
+
 
 def evaluation_step(batch, inference, device, criterion, metric):
 
@@ -61,9 +72,6 @@ def evaluation_step(batch, inference, device, criterion, metric):
 
     with torch.no_grad():
         inference_outputs = inference(inputs)  # (B, T, n_class)
-    
+
     loss = criterion(inference_outputs, gt_labels)
     metric(inference_outputs, gt_labels)
-
-    
-
