@@ -48,8 +48,8 @@ class AssistBranch(nn.Module):
             enc_out = layer(enc_out, enc_out, mask=mask)
 
         enc_out = self.norm(enc_out)
-        fused_probs = self.classifier(enc_out, enc_out)
-        return fused_probs
+        fine_logits, coarse_logits = self.classifier(enc_out, enc_out)
+        return fine_logits, coarse_logits
 
 
 class InferenceBranch(nn.Module):

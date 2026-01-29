@@ -1,5 +1,6 @@
 from AMGT.network import AssistBranch, InferenceBranch
 from utils import AsymetricLoss
+from apmeter import APMeter
 
 import torch
 from time import time
@@ -27,121 +28,135 @@ import torch.nn.functional as F
 #         raise ValueError(f"Unknown dataset: {dataset}")
 
 
-def training_epoch(
+def train_step(
+    args, dataloader, model, optimizer, criterion, device, epoch, network_type
+):
+    model.train()
+    total_loss = 0.0
+    num_iter = 0
+    apm = APMeter()
+
+    for batch in dataloader:
+        optimizer.zero_grad()
+        num_iter += 1
+
+        # Step 1: Unpack batch
+        # TODO: link with unpack_batch to cover different datasets
+        inputs, mask, labels, other, hm = batch
+        inputs = inputs.to(device)  # (B, T, D)
+        mask = mask.to(device) if mask is not None else None
+        labels = labels.to(device)  # (B, T, n_class)
+
+        # Step 2: Forward pass
+        fine_logits, coarse_logits = model(inputs)
+
+        # Step 3: Compute loss
+        coarse_loss = criterion(coarse_logits, labels) / torch.sum(mask)
+        fine_loss = criterion(fine_logits, labels) / torch.sum(mask)
+
+        loss = coarse_loss + fine_loss * args.fine_weight
+
+        # Step 4: Fused probs
+        fused_probs = F.sigmoid(
+            fine_logits * args.fine_weight
+            + coarse_logits * (1 - args.fine_weight)
+        ) * mask.unsqueeze(
+            2
+        )  # (B, T, n_class)
+
+        # Step 5: APM Update
+        apm.add(fused_probs.data.cpu().numpy()[0], batch[2].cpu().numpy()[0])
+        total_loss += loss.item()
+
+        # Step 6: Backward pass and optimization
+        loss.backward()
+        optimizer.step()
+
+    train_map = 100 * apm.value().mean()
+    if network_type is None:
+        raise ValueError(
+            "network_type must be specified as 'assist' or 'inference'"
+        )
+    print(
+        "epoch", epoch, "network_type:", network_type, "train-map:", train_map
+    )
+    apm.reset()
+
+    epoch_loss = total_loss / num_iter
+
+    return train_map, epoch_loss
+
+
+def evaluate_step(args, dataloader, model, criterion, device):
+    model.eval()
+    total_loss = 0.0
+    num_iter = 0
+    apm = APMeter()
+    sampled_apm = APMeter()
+
+    for batch in tqdm(dataloader, desc="Evaluation"):
+        num_iter += 1
+
+        # Step 1: Unpack batch
+        inputs, mask, labels, other, hm = batch
+        inputs = inputs.to(device)  # (B, T, D)
+        mask = mask.to(device) if mask is not None else None
+        labels = labels.to(device)  # (B, T, n_class)
+
+        # Step 2: Forward pass
+        with torch.no_grad():
+            fine_logits, coarse_logits = model(inputs)
+
+
+def fit(
+    args,
     dataloader,
     assist,
     inference,
     optimizer_assist,
     optimizer_inference,
-    criterion_assist,
-    criterion_inference,
+    criterion,
     device,
-    epoch,
 ):
-    total_loss_assist, total_loss_inference = 0.0, 0.0
+
     time_start = time()
 
-    for batch in tqdm(dataloader, desc="Training Epoch {epoch}"):
-        losses = trainning_step(
-            dataset,
-            batch,
+    Best_val_map = 0.0
+
+    for epoch in range(args.epochs):
+        epoch_start = time()
+
+        print(f"Epoch {epoch}/{args.epochs-1}")
+        print("-" * 20)
+
+        # Step 1: Train Assist Branch
+        train_map_assist, train_loss_assist = train_step(
+            args,
+            dataloader,
             assist,
-            inference,
             optimizer_assist,
-            optimizer_inference,
-            criterion_assist,
-            criterion_inference,
+            criterion,
             device,
+            epoch,
+            network_type="assist",
         )
 
-        total_loss_assist += losses["loss_assist"]
-        total_loss_inference += losses["loss_inference"]
-    time_end = time()
-    avg_loss_assist = total_loss_assist / len(dataloader)
-    avg_loss_inference = total_loss_inference / len(dataloader)
-    print(f"Training Epoch completed in {time_end - time_start:.2f} seconds")
-    return avg_loss_assist, avg_loss_inference
+        # Step 2: Train Inference Branch
+        # Copy classifier weights from Assist Branch to Inference Branch and freeze
+        inference.classifier.load_state_dict(assist.classifier.state_dict())
 
+        for param in inference.classifier.parameters():
+            param.requires_grad = False
+        for param in assist.classifier.parameters():
+            param.requires_grad = True
 
-def trainning_step(
-    dataset,
-    batch,
-    assist,
-    inference,
-    optimizer_assist,
-    optimizer_inference,
-    criterion_assist,
-    criterion_inference,
-    device,
-):
-    """
-
-    Args:
-        batch: _description_
-        assist: _description_
-        inference (_type_): _description_
-        optimizer_assist (_type_): _description_
-        optimizer_inference (_type_): _description_
-        criterion_assist (_type_): _description_
-        criterion_inference (_type_): _description_
-        device (_type_): _description_
-    """
-
-    assist.train()
-    inference.train()
-
-    # TODO: link with unpack_batch to cover different datasets
-    inputs, mask, labels, other, hm = batch
-
-    inputs = inputs.to(device)  # (B, T, D)
-    mask = mask.to(device) if mask is not None else None
-    labels = labels.to(device)  # (B, T, n_class)
-
-    optimizer_assist.zero_grad()
-    optimizer_inference.zero_grad()
-
-    # Step 1: Assist Branch Forward Pass
-    assist_outputs = assist(labels)  # (B, T, n_class)
-    assist_outputs = F.sigmoid(assist_outputs) * mask.unsqueeze(
-        2
-    )  # Apply mask if available
-    loss_assist = criterion_assist(
-        assist_outputs, labels
-    )  # AsymetricLoss(assist_outputs, labels) -> logits (B, T, n_class), labels (B, T, n_class)
-
-    loss_assist.backward()
-    optimizer_assist.step()
-
-    # Step 2: Copy Classifier Weights from Assist to Inference Branch and Freeze
-    inference.classifier.load_state_dict(assist.classifier.state_dict())
-    for param in inference.classifier.parameters():
-        param.requires_grad = False
-
-    for param in assist.classifier.parameters():
-        param.requires_grad = True
-
-    # Step 3: Inference Branch Forward Pass
-    inference_outputs = inference(inputs)  # (B, T, n_class)
-    loss_inference = criterion_inference(inference_outputs, gt_labels)
-    loss_inference.backward()
-    optimizer_inference.step()
-
-    return {
-        "loss_assist": loss_assist.item(),
-        "loss_inference": loss_inference.item(),
-    }
-
-
-def evaluation_step(batch, inference, device, criterion, metric):
-
-    inference.eval()
-
-    inputs, gt_labels = batch
-    inputs = inputs.to(device)  # (B, T, D)
-    gt_labels = gt_labels.to(device)  # (B, T, n_class)
-
-    with torch.no_grad():
-        inference_outputs = inference(inputs)  # (B, T, n_class)
-
-    loss = criterion(inference_outputs, gt_labels)
-    metric(inference_outputs, gt_labels)
+        train_map_inference, train_loss_inference = train_step(
+            args,
+            dataloader,
+            inference,
+            optimizer_inference,
+            criterion,
+            device,
+            epoch,
+            network_type="inference",
+        )
