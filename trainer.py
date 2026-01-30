@@ -11,7 +11,12 @@ import torch.nn.functional as F
 - train-epoch-level
 
   - batch-level
+    - unpack-batch
     - assist-train-step-level
+        - forward-pass
+        - logits-2-probs
+        - compute-loss
+        - backward-pass
     - inference-train-step-level
 
 - val-epoch-level
@@ -19,30 +24,47 @@ import torch.nn.functional as F
         - inference-eval-step-level
 """
 
+
 class AMGT:
 
-    def __init__(self, args, assist:AssistBranch, inference:InferenceBranch, optimizer, criterion,):
+    def __init__(
+        self,
+        args,
+        assist: AssistBranch,
+        inference: InferenceBranch,
+        optimizer,
+        criterion,
+    ):
         self.assist = assist
-        self.inference = inference 
+        self.inference = inference
         self.optimizer = optimizer
         self.criterion = criterion
         self.args = args
 
-    def train_step(self, batch):
-        
+    def train_step(self, inputs, mask, labels, model):
+
         # 1. foward pass
-        inputs, mask, labels, other, hm = batch
-        fine_logits, coarse_logits = self.assist(inputs)
-        fused_logits = fine_logits * self.args.fine_weight + coarse_logits * (1 - self.args.fine_weight)
-        fused_probs = F.sigmoid(fused_logits) * mask.unsqueeze(2)  # (B, T, n_class)
-        # 2. compute loss
+        fine_logits, coarse_logits = model(inputs)
+        # 2. logits to probs
+        fused_logits = fine_logits * self.args.fine_weight + coarse_logits * (
+            1 - self.args.fine_weight
+        )
+        fused_probs = F.sigmoid(fused_logits) * mask.unsqueeze(
+            2
+        )  # (B, T, n_class)
+        # 3. compute loss
         coarse_loss = self.criterion(coarse_logits, labels) / torch.sum(mask)
         fine_loss = self.criterion(fine_logits, labels) / torch.sum(mask)
         loss = coarse_loss + fine_loss * self.args.fine_weight
-        # 3. backward pass
+        # 4. backward pass
+        loss.backward()
+        self.optimizer.step()
 
-
-
+        return (
+            fused_logits,
+            loss,
+            fused_probs,
+        )
 
     def fit(self, train_loader, val_loader):
         time_start = time()
@@ -65,11 +87,11 @@ class AMGT:
                 labels = labels.to(self.args.device)  # (B, T, n_class)
 
                 # assist train step level
+                a_logits, a_loss, a_probs = self.train_step(batch)
 
                 # inference train step level
 
             # Evaluate Epoch Level
-
 
 
 # def unpack_batch(batch, dataset, phase="training"):
