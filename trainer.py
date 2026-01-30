@@ -7,6 +7,70 @@ from time import time
 from tqdm import tqdm
 import torch.nn.functional as F
 
+""" 
+- train-epoch-level
+
+  - batch-level
+    - assist-train-step-level
+    - inference-train-step-level
+
+- val-epoch-level
+    - batch-level
+        - inference-eval-step-level
+"""
+
+class AMGT:
+
+    def __init__(self, args, assist:AssistBranch, inference:InferenceBranch, optimizer, criterion,):
+        self.assist = assist
+        self.inference = inference 
+        self.optimizer = optimizer
+        self.criterion = criterion
+        self.args = args
+
+    def train_step(self, batch):
+        
+        # 1. foward pass
+        inputs, mask, labels, other, hm = batch
+        fine_logits, coarse_logits = self.assist(inputs)
+        fused_logits = fine_logits * self.args.fine_weight + coarse_logits * (1 - self.args.fine_weight)
+        fused_probs = F.sigmoid(fused_logits) * mask.unsqueeze(2)  # (B, T, n_class)
+        # 2. compute loss
+        coarse_loss = self.criterion(coarse_logits, labels) / torch.sum(mask)
+        fine_loss = self.criterion(fine_logits, labels) / torch.sum(mask)
+        loss = coarse_loss + fine_loss * self.args.fine_weight
+        # 3. backward pass
+
+
+
+
+    def fit(self, train_loader, val_loader):
+        time_start = time()
+
+        Best_val_map = 0.0
+
+        for epoch in range(self.args.epochs):
+            epoch_start = time()
+
+            print(f"Epoch {epoch}/{self.args.epochs-1}")
+            print("-" * 20)
+
+            # Train Epoch Level
+            for batch in train_loader:
+
+                # unpack batch
+                inputs, mask, labels, other, hm = batch
+                inputs = inputs.to(self.args.device)  # (B, T, D)
+                mask = mask.to(self.args.device) if mask is not None else None
+                labels = labels.to(self.args.device)  # (B, T, n_class)
+
+                # assist train step level
+
+                # inference train step level
+
+            # Evaluate Epoch Level
+
+
 
 # def unpack_batch(batch, dataset, phase="training"):
 #     inputs, mask, laebls, other, hm = batch
