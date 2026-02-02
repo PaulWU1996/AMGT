@@ -105,7 +105,7 @@ class AMGT:
                     mask,
                     labels,
                     self.assist,
-                    a_loss,
+                    a_apm,
                 )
                 a_loss += loss.item()
 
@@ -120,7 +120,7 @@ class AMGT:
 
                 # inference train step level
                 i_logits, loss, i_probs = self.train_step(
-                    inputs, mask, labels, self.inference, i_loss
+                    inputs, mask, labels, self.inference, i_apm
                 )
                 i_loss += loss.item()
             # train epoch level metrics update
