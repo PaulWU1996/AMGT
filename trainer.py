@@ -131,11 +131,10 @@ class AMGT:
                 inputs = inputs.to(self.args.device)  # (B, T, D)
                 mask = mask.to(self.args.device) if mask is not None else None
                 labels = labels.to(self.args.device)  # (B, T, n_class)
+                data = (inputs, mask, labels, other, hm)
 
                 # assist train step level
-                _, loss, _ = self.train_step(
-                    inputs, mask, labels, self.assist, a_apm
-                )
+                _, loss, _ = self.train_step(data, self.assist, a_apm)
                 a_loss += loss.item()
 
                 # sync classifier weights and freeze
@@ -148,9 +147,7 @@ class AMGT:
                     param.requires_grad = True
 
                 # inference train step level
-                _, loss, _ = self.train_step(
-                    inputs, mask, labels, self.inference, i_apm
-                )
+                _, loss, _ = self.train_step(data, self.inference, i_apm)
                 i_loss += loss.item()
             # train epoch level metrics update
             a_map, a_epoch_loss = self.epoch_metrics_updates(
