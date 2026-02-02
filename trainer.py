@@ -41,7 +41,7 @@ class AMGT:
         self.criterion = criterion
         self.args = args
 
-    def train_step(self, inputs, mask, labels, model, tot_loss, apm):
+    def train_step(self, inputs, mask, labels, model, apm):
 
         self.optimizer.zero_grad()
         model.train()
@@ -64,13 +64,8 @@ class AMGT:
         self.optimizer.step()
         # 5. Metric update
         apm.add(fused_probs.data.cpu().numpy()[0], labels.cpu().numpy()[0])
-        tot_loss += loss.item()
 
-        return (
-            fused_logits,
-            loss,
-            fused_probs,
-        )
+        return (fused_logits, loss, fused_probs)
 
     def fit(self, train_loader, val_loader):
         time_start = time()
@@ -101,14 +96,33 @@ class AMGT:
                 labels = labels.to(self.args.device)  # (B, T, n_class)
 
                 # assist train step level
-                a_logits, a_loss, a_probs = self.train_step(
-                    inputs, mask, labels, self.assist, a_loss, a_apm
+                (
+                    a_logits,
+                    loss,
+                    a_probs,
+                ) = self.train_step(
+                    inputs,
+                    mask,
+                    labels,
+                    self.assist,
+                    a_loss,
                 )
+                a_loss += loss.item()
+
+                # sync classifier weights and freeze
+                self.inference.classifier.load_state_dict(
+                    self.assist.classifier.state_dict()
+                )
+                for param in self.inference.classifier.parameters():
+                    param.requires_grad = False
+                for param in self.assist.classifier.parameters():
+                    param.requires_grad = True
 
                 # inference train step level
-                i_logits, i_loss, i_probs = self.train_step(
-                    inputs, mask, labels, self.inference, i_loss, i_apm
+                i_logits, loss, i_probs = self.train_step(
+                    inputs, mask, labels, self.inference, i_loss
                 )
+                i_loss += loss.item()
             # train epoch level metrics update
             a_map = 100 * a_apm.value().mean()
             i_map = 100 * i_apm.value().mean()
