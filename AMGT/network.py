@@ -95,6 +95,6 @@ class InferenceBranch(nn.Module):
         downsampled_feats = self.downsampler(x)
         msbm_out = self.msbm(downsampled_feats)
         fine_feat, coarse_feat = self.mixture(msbm_out)
-        fused_probs = self.classifier(coarse_feat, fine_feat)
+        fine_feat, coarse_feat = self.classifier(coarse_feat, fine_feat)
 
-        return fused_probs
+        return fine_feat, coarse_feat

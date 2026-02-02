@@ -35,8 +35,8 @@ class AMGT:
         optimizer,
         criterion,
     ):
-        self.assist = assist
-        self.inference = inference
+        self.assist = assist.to(args.device)
+        self.inference = inference.to(args.device)
         self.optimizer = optimizer
         self.criterion = criterion
         self.args = args
