@@ -64,7 +64,7 @@ class DSBlock(nn.Module):
 class BiMamba2(nn.Module):
     """Bi-directional Mamba2 Block"""
 
-    def __init__(self, d_model, d_state=64, d_conv=4, expand=2):
+    def __init__(self, d_model, d_state=128, d_conv=4, expand=2):
         super().__init__()
 
         self.mamba_fwd = Mamba2(
