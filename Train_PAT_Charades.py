@@ -29,7 +29,7 @@ parser.add_argument("-dataset", type=str, default="charades")
 parser.add_argument(
     "-rgb_root",
     type=str,
-    default="/media/faegheh/T71/Charades-Dataset/Charades_v1_rgb_feats_2/",
+    default="/mnt/fast/nobackup/users/pw0036/Charades_v1_rgb_feats_2",
 )
 parser.add_argument("-type", type=str, default="original")
 parser.add_argument("-lr", type=str, default="0.0001")
@@ -43,11 +43,11 @@ parser.add_argument("-num_layer", type=str, default="False")
 parser.add_argument("-unisize", type=str, default="True")
 parser.add_argument("-num_classes", type=int, default=157)
 parser.add_argument(
-    "-annotation_file", type=str, default="./data/charades.json"
+    "-annotation_file", type=str, default="/mnt/fast/nobackup/users/pw0036/AMGT/data/charades.json"
 )
 parser.add_argument("-fine_weight", type=float, default=0.1)
 parser.add_argument("-coarse_weight", type=float, default=0.9)
-parser.add_argument("-save_logit_path", type=str, default="./save_logit_path")
+parser.add_argument("-save_logit_path", type=str, default="./save_logit_rgb")
 parser.add_argument("-step_size", type=int, default=7)
 parser.add_argument("-gamma", type=float, default=0.1)
 
@@ -210,10 +210,14 @@ def run_network(model, data, gpu):
     mask = Variable(mask.cuda(gpu))
     labels = Variable(labels.cuda(gpu))
 
-    inputs = inputs.squeeze(3).squeeze(3)
+    if torch.equal(inputs, labels):
+        pass
+    else:
+        inputs = inputs.squeeze(3).squeeze(3) # B D T
+        inputs = inputs.transpose(1, 2) # B T D
     fine_probs, coarse_probs = model(inputs)
 
-    # Logit
+    # Logits
     finall_f = torch.stack(
         [args.fine_weight * fine_probs, args.coarse_weight * coarse_probs]
     )
@@ -247,7 +251,9 @@ def train_step(model1, model2, gpu, optimizer, dataloader, epoch):
         optimizer.zero_grad()
         num_iter += 1
 
-        outputs, loss, probs, err = run_network(model1, data, gpu)
+        inputs, mask, labels, other, hm = data
+        data1 = (labels, mask, labels, other, hm)
+        outputs, loss, probs, err = run_network(model1, data1, gpu)
         a_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
         a_error += err.data
         a_tot_loss += loss.data
@@ -338,7 +344,7 @@ def val_step(model, gpu, dataloader, epoch):
 
 # # for rgb
 if __name__ == "__main__":
-    train_split = "charades.json"
+    train_split = "./data/charades.json"
     test_split = train_split
     dataloaders, datasets = load_data(train_split, test_split, args.rgb_root)
     print(len(dataloaders["train"]))
@@ -353,7 +359,7 @@ if __name__ == "__main__":
             from AMGT.network import AssistBranch, InferenceBranch
 
             assist_model = AssistBranch(
-                d_model=512,
+                d_model=1024,
                 n_class=args.num_classes,
                 n_layers=3,
                 n_head=8,
@@ -399,13 +405,13 @@ if __name__ == "__main__":
         # )
         run(
             [
-                assist_model,
+                (assist_model,
                 inference_model,
                 0,
                 dataloaders,
                 optimizer,
                 lr_sched,
-                args.comp_info,
+                args.comp_info,)
             ],
             criterion,
             num_epochs=int(args.epoch),

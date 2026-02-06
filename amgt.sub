@@ -1,0 +1,17 @@
+#!/bin/sh
+
+#SBATCH --job-name="CoLeaf"
+#SBATCH --partition=3090
+#SBATCH --gres=gpu:1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=16
+#SBATCH --mem=32G
+#SBATCH -o slurm.%N.%j.out
+#SBATCH -e slurm.%N.%j.err
+
+# ==== Environment setup ====
+SIF_IMG="/mnt/fast/nobackup/users/pw0036/apptainer/mamba1.sif"
+export WANDB_API_KEY="050f9ab2c4af57824144c3d81083a7d8fed14582"
+
+# ==== Execution ====
+apptainer exec $SIF_IMG  python /mnt/fast/nobackup/users/pw0036/AMGT/Train_PAT_Charades.py
