@@ -50,6 +50,7 @@ parser.add_argument("-coarse_weight", type=float, default=0.9)
 parser.add_argument("-save_logit_path", type=str, default="./save_logit_rgb")
 parser.add_argument("-step_size", type=int, default=7)
 parser.add_argument("-gamma", type=float, default=0.1)
+parser.add_argument("-patience", type=int, default=5)
 
 args = parser.parse_args()
 
@@ -70,6 +71,18 @@ print("Random_SEED:", SEED)
 batch_size = args.batch_size
 new_loss = AsymmetricLoss()
 # new_loss = FocalLoss2d()
+
+def cosine_similarity_loss(x1, x2):
+    cos_sim = F.cosine_similarity(x1, x2, dim=-1)
+    loss = (1.0 - cos_sim).mean()
+    return loss
+
+def relational_loss(s_logits, t_logits):
+    # 计算 T 维度的自相关 (B, T, T)
+    s_rel = torch.bmm(s_logits, s_logits.transpose(1, 2))
+    t_rel = torch.bmm(t_logits, t_logits.transpose(1, 2))
+    # 归一化后计算 MSE
+    return F.mse_loss(F.normalize(s_rel, dim=-1), F.normalize(t_rel, dim=-1).detach())
 
 if args.dataset == "charades":
     from charades_dataloader import Charades as Dataset
@@ -139,6 +152,7 @@ def load_data(train_split, val_split, root):
 def run(models, criterion, num_epochs=50):
     since = time.time()
     Best_val_map = 0.0
+    worse = 0
     for epoch in range(num_epochs):
         since1 = time.time()
         print("Epoch {}/{}".format(epoch, num_epochs - 1))
@@ -172,6 +186,7 @@ def run(models, criterion, num_epochs=50):
 
             if Best_val_map < val_map:
                 Best_val_map = val_map
+                worse = 0
             print("epoch", epoch, "Best Val Map Update", Best_val_map)
             pickle.dump(
                 prob_val,
@@ -184,6 +199,8 @@ def run(models, criterion, num_epochs=50):
                 args.annotation_file,
                 args.num_classes,
             )
+            else:
+                worse += 1
 
 
 def eval_model(model, dataloader, baseline=False):
@@ -253,7 +270,7 @@ def train_step(model1, model2, gpu, optimizer, dataloader, epoch):
 
         inputs, mask, labels, other, hm = data
         data1 = (labels, mask, labels, other, hm)
-        outputs, loss, probs, err = run_network(model1, data1, gpu)
+        a_outputs, loss, probs, err = run_network(model1, data1, gpu)
         a_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
         a_error += err.data
         a_tot_loss += loss.data
@@ -268,7 +285,9 @@ def train_step(model1, model2, gpu, optimizer, dataloader, epoch):
             p.requires_grad = True
 
         optimizer.zero_grad()
-        outputs, loss, probs, err = run_network(model2, data, gpu)
+        i_outputs, loss, probs, err = run_network(model2, data, gpu)
+        loss = loss + cosine_similarity_loss(a_outputs, i_outputs) + relational_loss(a_outputs, i_outputs)
+
         i_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
         i_error += err.data
         i_tot_loss += loss.data
