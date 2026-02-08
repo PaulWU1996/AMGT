@@ -187,6 +187,8 @@ def run(models, criterion, num_epochs=50):
             if Best_val_map < val_map:
                 Best_val_map = val_map
                 worse = 0
+            else:
+                worse += 1
             print("epoch", epoch, "Best Val Map Update", Best_val_map)
             pickle.dump(
                 prob_val,
@@ -199,8 +201,9 @@ def run(models, criterion, num_epochs=50):
                 args.annotation_file,
                 args.num_classes,
             )
-            else:
-                worse += 1
+            if worse >= args.patience:
+                print("Early stopping at epoch", epoch)
+                break
 
 
 def eval_model(model, dataloader, baseline=False):
