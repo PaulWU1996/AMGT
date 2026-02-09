@@ -203,7 +203,7 @@ def run(models, criterion, num_epochs=50):
             )
             if worse >= args.patience:
                 print("Early stopping at epoch", epoch)
-                break
+                return
 
 
 def eval_model(model, dataloader, baseline=False):
@@ -289,7 +289,8 @@ def train_step(model1, model2, gpu, optimizer, dataloader, epoch):
 
         optimizer.zero_grad()
         i_outputs, loss, probs, err = run_network(model2, data, gpu)
-        loss = loss + cosine_similarity_loss(a_outputs, i_outputs) + relational_loss(a_outputs, i_outputs)
+        detach_a_outputs = a_outputs.detach()
+        loss = loss + cosine_similarity_loss(detach_a_outputs, i_outputs) + relational_loss(detach_a_outputs, i_outputs)
 
         i_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
         i_error += err.data
