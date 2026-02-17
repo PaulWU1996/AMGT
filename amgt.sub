@@ -1,6 +1,6 @@
 #!/bin/sh
 
-#SBATCH --job-name="CoLeaf"
+#SBATCH --job-name="AI4ME_AMGT_Charades"
 #SBATCH --partition=3090
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1

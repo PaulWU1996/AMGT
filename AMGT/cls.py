@@ -47,3 +47,21 @@ class Classifier(nn.Module):
         #     1 - self.fine_weight
         # ) * coarse_probs + self.fine_weight * fine_probs
         return fine_logits, coarse_logits
+
+# class Classifier(nn.Module):
+
+#     def __init__(
+#             self,
+#             d_model,
+#             n_cls,
+#     ):
+#         super().__init__()
+#         self.cls = nn.Conv1d(d_model, n_cls, kernel_size=1)
+
+
+#     def forward(self, x):
+
+#         # x: (B, T, D)
+#         logits = self.cls(x.transpose(1, 2))  # (B, n_cls, T)
+#         logits = logits.transpose(1, 2)  # (B, T, n_cls)
+#         return logits

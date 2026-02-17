@@ -48,9 +48,12 @@ parser.add_argument(
 parser.add_argument("-fine_weight", type=float, default=0.1)
 parser.add_argument("-coarse_weight", type=float, default=0.9)
 parser.add_argument("-save_logit_path", type=str, default="./save_logit_rgb")
-parser.add_argument("-step_size", type=int, default=7)
+parser.add_argument("-step_size", type=int, default=5)
 parser.add_argument("-gamma", type=float, default=0.1)
 parser.add_argument("-patience", type=int, default=5)
+
+parser.add_argument("-scale_control", type=bool, default=True)
+parser.add_argument("-temporal_control", type=bool, default=False)
 
 args = parser.parse_args()
 
@@ -71,6 +74,18 @@ print("Random_SEED:", SEED)
 batch_size = args.batch_size
 new_loss = AsymmetricLoss()
 # new_loss = FocalLoss2d()
+
+def cosine_similarity_loss(x1, x2):
+    cos_sim = F.cosine_similarity(x1, x2, dim=-1)
+    loss = (1.0 - cos_sim).mean()
+    return loss
+
+def relational_loss(s_logits, t_logits):
+    # 计算 T 维度的自相关 (B, T, T)
+    s_rel = torch.bmm(s_logits, s_logits.transpose(1, 2))
+    t_rel = torch.bmm(t_logits, t_logits.transpose(1, 2))
+    # 归一化后计算 MSE
+    return F.mse_loss(F.normalize(s_rel, dim=-1), F.normalize(t_rel, dim=-1).detach())
 
 def cosine_similarity_loss(x1, x2):
     cos_sim = F.cosine_similarity(x1, x2, dim=-1)
@@ -151,59 +166,51 @@ def load_data(train_split, val_split, root):
 
 def run(models, criterion, num_epochs=50):
     since = time.time()
-    Best_val_map = 0.0
+    best_val_map = 0.0
     worse = 0
+    
     for epoch in range(num_epochs):
-        since1 = time.time()
-        print("Epoch {}/{}".format(epoch, num_epochs - 1))
-        print("-" * 10)
-        for (
-            model1,
-            model2,
-            gpu,
-            dataloader,
-            optimizer,
-            sched,
-            model_file,
-        ) in models:
-            _, _, _, _ = train_step(
-                model1, model2, gpu, optimizer, dataloader["train"], epoch
-            )
-            prob_val, val_loss, val_map = val_step(
-                model2, gpu, dataloader["val"], epoch
-            )
-            # sched.step(val_loss)
+        epoch_start_time = time.time()
+        print("-" * 20)
+        print(f"Epoch {epoch}/{num_epochs - 1}")
+        
+        
+        # 记录这个 Epoch 是否有任何模型取得了进步
+        epoch_improved = False
+        
+        for (model1, model2, gpu, dataloader, optimizer, sched, model_file) in models:
+            # 训练与验证
+            train_step(model1, model2, gpu, optimizer, dataloader["train"], epoch)
+            prob_val, val_loss, val_map = val_step(model2, gpu, dataloader["val"], epoch)
+            
             sched.step()
-            # Time
-            print(
-                "epoch",
-                epoch,
-                "Total_Time",
-                time.time() - since,
-                "Epoch_time",
-                time.time() - since1,
-            )
 
-            if Best_val_map < val_map:
-                Best_val_map = val_map
-                worse = 0
-            else:
-                worse += 1
-            print("epoch", epoch, "Best Val Map Update", Best_val_map)
-            pickle.dump(
-                prob_val,
-                open("./save_logit_rgb/" + str(epoch) + ".pkl", "wb"),
-                pickle.HIGHEST_PROTOCOL,
-            )
-            print("logit_saved at:", "./save_logit_rgb/" + str(epoch) + ".pkl")
-            print_second_metric(
-                "./save_logit_rgb/" + str(epoch) + ".pkl",
-                args.annotation_file,
-                args.num_classes,
-            )
-            if worse >= args.patience:
-                print("Early stopping at epoch", epoch)
-                return
+            # 检查是否有提升
+            if val_map > best_val_map:
+                best_val_map = val_map
+                epoch_improved = True
+                # 建议在这里增加保存权重的逻辑
+                torch.save(model2.state_dict(), f"best_model_{model_file}.pt")
+            
+            # 保存 Logits
+            save_path = f"./save_logit_rgb/{epoch}.pkl"
+            with open(save_path, "wb") as f:
+                pickle.dump(prob_val, f, pickle.HIGHEST_PROTOCOL)
+            
+            print_second_metric(save_path, args.annotation_file, args.num_classes)
+
+        # --- 重点：在所有模型跑完一轮 Epoch 后再判断提前停止 ---
+        if epoch_improved:
+            worse = 0
+        else:
+            worse += 1
+            print(f"No improvement for {worse} epoch(s).")
+
+        print(f"Epoch {epoch} Time: {time.time() - epoch_start_time:.2f}s | Best Map: {best_val_map:.4f}")
+
+        if worse >= args.patience:
+            print(f"Early stopping triggered at epoch {epoch}. Best Val Map: {best_val_map}")
+            break # 使用 break 比 return 更规范，方便后续可能的汇总操作
 
 
 def eval_model(model, dataloader, baseline=False):
@@ -235,6 +242,7 @@ def run_network(model, data, gpu):
     else:
         inputs = inputs.squeeze(3).squeeze(3) # B D T
         inputs = inputs.transpose(1, 2) # B T D
+
     fine_probs, coarse_probs = model(inputs)
 
     # Logits
@@ -256,6 +264,77 @@ def run_network(model, data, gpu):
     return finall_f, loss, probs_f, corr / tot
 
 
+def run_assist(model, data, gpu):
+    inputs, mask, labels, other, hm = data
+    inputs = Variable(inputs.cuda(gpu))
+    mask = Variable(mask.cuda(gpu))
+    labels = Variable(labels.cuda(gpu))
+
+    fine_probs, coarse_probs = model(inputs)
+
+    # Logits
+    finall_f = torch.stack(
+        [args.fine_weight * fine_probs, args.coarse_weight * coarse_probs]
+    )
+    finall_f = torch.sum(finall_f, dim=0)
+
+    probs_f = F.sigmoid(finall_f) * mask.unsqueeze(2)
+
+    loss_coarse = new_loss(coarse_probs, labels) / torch.sum(mask)
+    loss_fine = new_loss(fine_probs, labels) / torch.sum(mask)
+
+    loss = loss_coarse + args.fine_weight * loss_fine
+
+    corr = torch.sum(mask)
+    tot = torch.sum(mask)
+
+    return finall_f, loss, probs_f, corr / tot
+
+
+def run_inference(model, data, gpu):
+    inputs, mask, labels, other, hm = data
+    inputs = Variable(inputs.cuda(gpu))
+    mask = Variable(mask.cuda(gpu))
+    labels = Variable(labels.cuda(gpu))
+
+    inputs = inputs.squeeze(3).squeeze(3) # B D T
+    inputs = inputs.transpose(1, 2) # B T D
+
+    fine_probs, coarse_probs, ms_feat = model(inputs)
+
+    # Logits
+    finall_f = torch.stack(
+        [args.fine_weight * fine_probs, args.coarse_weight * coarse_probs]
+    )
+    finall_f = torch.sum(finall_f, dim=0)
+
+    probs_f = F.sigmoid(finall_f) * mask.unsqueeze(2)
+
+    loss_coarse = new_loss(coarse_probs, labels) / torch.sum(mask)
+    loss_fine = new_loss(fine_probs, labels) / torch.sum(mask)
+
+    loss = loss_coarse + args.fine_weight * loss_fine
+
+    if args.scale_control:
+        ms_feat = ms_feat.detach() # ms_feat: (B, S, T, D) S 是尺度数量
+        _, s, _, _ = ms_feat.size()
+        scale_loss = 0
+        for i in range(1,s):
+            i_loss = cosine_similarity_loss(ms_feat[:, 0,:,:], ms_feat[:, i,:,:])
+            scale_loss += i_loss
+
+        scale_loss = scale_loss / (s - 1) # 平均每个尺度的损失
+        loss = loss + scale_loss
+
+    corr = torch.sum(mask)
+    tot = torch.sum(mask)
+
+
+
+    return finall_f, loss, probs_f, corr / tot
+
+
+
 def train_step(model1, model2, gpu, optimizer, dataloader, epoch):
     model1.train(True)
     model2.train(True)
@@ -273,31 +352,61 @@ def train_step(model1, model2, gpu, optimizer, dataloader, epoch):
 
         inputs, mask, labels, other, hm = data
         data1 = (labels, mask, labels, other, hm)
-        a_outputs, loss, probs, err = run_network(model1, data1, gpu)
+        a_outputs, loss, probs, err = run_assist(model1, data1, gpu)
         a_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
         a_error += err.data
-        a_tot_loss += loss.data
+        a_tot_loss += loss.data 
 
         loss.backward()
         optimizer.step()
 
-        model2.classifier.load_state_dict(model1.classifier.state_dict())
-        for p in model2.classifier.parameters():
-            p.requires_grad = False
-        for p in model1.classifier.parameters():
-            p.requires_grad = True
+        i_outputs, loss, i_probs, err = run_inference(model2, data, gpu)
 
-        optimizer.zero_grad()
-        i_outputs, loss, probs, err = run_network(model2, data, gpu)
-        detach_a_outputs = a_outputs.detach()
-        loss = loss + cosine_similarity_loss(detach_a_outputs, i_outputs) + relational_loss(detach_a_outputs, i_outputs)
+        if args.temporal_control: # Temporal Control
+            i_attn_temporal =  torch.bmm(i_outputs.detach(),i_outputs.detach().transpose(1,2))# (B, T, T)
+            a_attn_temporal = torch.bmm(a_outputs.detach(),a_outputs.detach().transpose(1,2)) # (B, T, T)
+            temporal_loss = F.mse_loss(F.normalize(i_attn_temporal, dim=-1), F.normalize(a_attn_temporal, dim=-1))
+            loss+= temporal_loss
 
-        i_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
+
+        i_apm.add(i_probs.data.cpu().numpy()[0], data[2].numpy()[0])
         i_error += err.data
         i_tot_loss += loss.data
 
         loss.backward()
         optimizer.step()
+
+    # for data in dataloader:
+    #     optimizer.zero_grad()
+    #     num_iter += 1
+
+    #     inputs, mask, labels, other, hm = data
+    #     data1 = (labels, mask, labels, other, hm)
+    #     a_outputs, loss, probs, err = run_network(model1, data1, gpu)
+    #     a_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
+    #     a_error += err.data
+    #     a_tot_loss += loss.data
+
+    #     loss.backward()
+    #     optimizer.step()
+
+    #     # model2.classifier.load_state_dict(model1.classifier.state_dict())
+    #     # for p in model2.classifier.parameters():
+    #     #     p.requires_grad = False
+    #     # for p in model1.classifier.parameters():
+    #     #     p.requires_grad = True
+
+    #     optimizer.zero_grad()
+    #     i_outputs, loss, probs, err = run_network(model2, data, gpu)
+    #     detach_a_outputs = a_outputs.detach()
+    #     loss = loss + cosine_similarity_loss(detach_a_outputs, i_outputs) + relational_loss(detach_a_outputs, i_outputs)
+
+    #     i_apm.add(probs.data.cpu().numpy()[0], data[2].numpy()[0])
+    #     i_error += err.data
+    #     i_tot_loss += loss.data
+
+    #     loss.backward()
+    #     optimizer.step()
 
     a_train_map = 100 * a_apm.value().mean()
     print("epoch", epoch, "assist train-map:", a_train_map)
@@ -327,7 +436,8 @@ def val_step(model, gpu, dataloader, epoch):
         num_iter += 1
         other = data[3]
 
-        outputs, loss, probs, err = run_network(model, data, gpu)
+        # outputs, loss, probs, err = run_network(model, data, gpu)
+        outputs, loss, probs, err = run_inference(model, data, gpu)
         if sum(data[1].numpy()[0]) > 25:
             p1, l1 = sampled_25(
                 probs.data.cpu().numpy()[0],
@@ -382,22 +492,40 @@ if __name__ == "__main__":
             from AMGT.network import AssistBranch, InferenceBranch
 
             assist_model = AssistBranch(
-                d_model=1024,
+                d_model=512,
                 n_class=args.num_classes,
                 n_layers=3,
                 n_head=8,
                 max_offset=512,
             )
+            # inference_model = InferenceBranch(
+            #     d_model=1024,
+            #     scale_factor=2,
+            #     depth=3,
+            #     d_state=128,
+            #     d_conv=4,
+            #     expand=2,
+            #     mode="linear",
+            #     align_corners=True,
+            #     n_cls=int(args.num_classes),
+            # )
+            # inference_model = InferenceBranch(
+            #     d_model=1024,
+            #     d_state=128,
+            #     d_conv=4,
+            #     expand=2,
+            #     scales=[2, 4],
+            #     n_cls=int(args.num_classes),
+            #     fine_weight=0.1,)
             inference_model = InferenceBranch(
-                d_model=1024,
-                scale_factor=2,
-                depth=3,
+                d_input=1024,
+                d_embed=512,
                 d_state=128,
                 d_conv=4,
                 expand=2,
-                mode="linear",
-                align_corners=True,
+                scales=[2, 4],
                 n_cls=int(args.num_classes),
+                fine_weight=0.1,
             )
 
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
