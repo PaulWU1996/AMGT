@@ -4,3 +4,9 @@
 *.ptx
 *.cubin
 *.fatbin
+/save_logit_rgb
+*.err
+*.out
+*.json
+*.pyc
+*.pt
